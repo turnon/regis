@@ -14,6 +14,13 @@ type database struct {
 	deadlines map[string]time.Time
 }
 
+func newDatabase() *database {
+	return &database{
+		items:     map[string][]byte{},
+		deadlines: map[string]time.Time{},
+	}
+}
+
 func (db *database) Set(conn redcon.Conn, cmd redcon.Command) {
 	if len(cmd.Args) != 3 {
 		conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
@@ -45,13 +52,13 @@ func (db *database) Del(conn redcon.Conn, cmd redcon.Command) {
 	}
 
 	_, ok := db.items[string(cmd.Args[1])]
-	delete(db.items, string(cmd.Args[1]))
-	delete(db.deadlines, string(cmd.Args[1]))
 	if !ok {
 		conn.WriteInt(0)
-	} else {
-		conn.WriteInt(1)
+		return
 	}
+
+	db.delete(string(cmd.Args[1]))
+	conn.WriteInt(1)
 }
 
 func (db *database) Expire(conn redcon.Conn, cmd redcon.Command) {
@@ -86,7 +93,11 @@ func (db *database) expire() {
 		}
 	}
 	for _, key := range toDel {
-		delete(db.items, key)
-		delete(db.deadlines, key)
+		db.delete(key)
 	}
+}
+
+func (db *database) delete(key string) {
+	delete(db.items, key)
+	delete(db.deadlines, key)
 }

@@ -93,10 +93,7 @@ func (r *server) getDbWithConn(conn net.Conn) *database {
 func (r *server) selectDbByNo(dbno string) *database {
 	db, ok := r.dbno2Database[dbno]
 	if !ok {
-		db = &database{
-			items:     map[string][]byte{},
-			deadlines: map[string]time.Time{},
-		}
+		db = newDatabase()
 		r.dbno2Database[dbno] = db
 	}
 	return db
