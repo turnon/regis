@@ -4,6 +4,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tidwall/redcon"
 )
@@ -19,6 +20,8 @@ func ListenAndServe(addr string) error {
 		conn2Dbno:     map[net.Conn]string{},
 		dbno2Database: map[string]*database{},
 	}
+
+	r.startExpireJob()
 
 	return redcon.ListenAndServe(addr, func(conn redcon.Conn, cmd redcon.Command) {
 		// for i, c := range cmd.Args {
@@ -90,7 +93,10 @@ func (r *server) getDbWithConn(conn net.Conn) *database {
 func (r *server) selectDbByNo(dbno string) *database {
 	db, ok := r.dbno2Database[dbno]
 	if !ok {
-		db := &database{items: map[string][]byte{}}
+		db = &database{
+			items:     map[string][]byte{},
+			deadlines: map[string]time.Time{},
+		}
 		r.dbno2Database[dbno] = db
 	}
 	return db
@@ -110,5 +116,32 @@ func (r *server) Exec(conn redcon.Conn, cmd redcon.Command) {
 		db.Get(conn, cmd)
 	case "del":
 		db.Del(conn, cmd)
+	case "expire":
+		db.Expire(conn, cmd)
+	}
+}
+
+func (r *server) startExpireJob() {
+	ticker := time.NewTicker(time.Second)
+	go func() {
+		for {
+			<-ticker.C
+			r.expire()
+		}
+	}()
+}
+
+func (r *server) expire() {
+	r.lock.Lock()
+	dbs := make([]*database, 0, len(r.dbno2Database))
+	for _, db := range r.dbno2Database {
+		dbs = append(dbs, db)
+	}
+	r.lock.Unlock()
+
+	for _, db := range dbs {
+		db.lock.Lock()
+		db.expire()
+		db.lock.Unlock()
 	}
 }
