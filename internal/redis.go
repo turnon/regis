@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"net"
 	"strings"
 	"sync"
 
@@ -8,13 +9,16 @@ import (
 )
 
 type redisInMem struct {
-	lock  sync.RWMutex
-	items map[string][]byte
+	lock          sync.Mutex
+	conn2Dbno     map[net.Conn]string
+	dbno2Database map[string]*database
 }
 
 func ListenAndServe(addr string) error {
-	r := &redisInMem{}
-	r.items = make(map[string][]byte)
+	r := &redisInMem{
+		conn2Dbno:     map[net.Conn]string{},
+		dbno2Database: map[string]*database{},
+	}
 
 	return redcon.ListenAndServe(addr, func(conn redcon.Conn, cmd redcon.Command) {
 		// for i, c := range cmd.Args {
@@ -22,20 +26,14 @@ func ListenAndServe(addr string) error {
 		// }
 
 		switch strings.ToLower(string(cmd.Args[0])) {
-		default:
-			r.UnknownCmd(conn, cmd)
 		case "ping":
 			r.Ping(conn)
 		case "quit":
 			r.Quit(conn)
 		case "select":
 			r.Select(conn, cmd)
-		case "set":
-			r.Set(conn, cmd)
-		case "get":
-			r.Get(conn, cmd)
-		case "del":
-			r.Del(conn, cmd)
+		default:
+			r.Exec(conn, cmd)
 		}
 	}, func(conn redcon.Conn) bool {
 		// Use this function to accept or deny the connection.
@@ -47,67 +45,68 @@ func ListenAndServe(addr string) error {
 	})
 }
 
+func (r *redisInMem) UnknownCmd(conn redcon.Conn, cmd redcon.Command) {
+	conn.WriteError("ERR unknown command '" + string(cmd.Args[0]) + "'")
+}
+
 func (r *redisInMem) Ping(conn redcon.Conn) {
 	conn.WriteString("PONG")
 }
 
 func (r *redisInMem) Quit(conn redcon.Conn) {
+	delete(r.conn2Dbno, conn.NetConn())
 	conn.WriteString("OK")
 	conn.Close()
 }
 
 func (r *redisInMem) Select(conn redcon.Conn, cmd redcon.Command) {
+	r.setDbWithConnAndDbno(conn.NetConn(), string(cmd.Args[1]))
 	conn.WriteString("OK")
 }
 
-func (r *redisInMem) Set(conn redcon.Conn, cmd redcon.Command) {
-	if len(cmd.Args) != 3 {
-		conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
-		return
-	}
-
+func (r *redisInMem) setDbWithConnAndDbno(conn net.Conn, dbno string) *database {
 	r.lock.Lock()
-	r.items[string(cmd.Args[1])] = cmd.Args[2]
-	r.lock.Unlock()
+	defer r.lock.Unlock()
 
-	conn.WriteString("OK")
+	r.conn2Dbno[conn] = dbno
+	db := r.selectDbByNo(dbno)
+
+	return db
 }
 
-func (r *redisInMem) Get(conn redcon.Conn, cmd redcon.Command) {
-	if len(cmd.Args) != 2 {
-		conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
-		return
-	}
-
-	r.lock.RLock()
-	val, ok := r.items[string(cmd.Args[1])]
-	r.lock.RUnlock()
-
-	if !ok {
-		conn.WriteNull()
-	} else {
-		conn.WriteBulk(val)
-	}
-}
-
-func (r *redisInMem) Del(conn redcon.Conn, cmd redcon.Command) {
-	if len(cmd.Args) != 2 {
-		conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
-		return
-	}
-
+func (r *redisInMem) getDbWithConn(conn net.Conn) *database {
 	r.lock.Lock()
-	_, ok := r.items[string(cmd.Args[1])]
-	delete(r.items, string(cmd.Args[1]))
-	r.lock.Unlock()
+	defer r.lock.Unlock()
 
+	dbno, ok := r.conn2Dbno[conn]
 	if !ok {
-		conn.WriteInt(0)
-	} else {
-		conn.WriteInt(1)
+		dbno = "0"
 	}
+	db := r.selectDbByNo(dbno)
+
+	return db
 }
 
-func (r *redisInMem) UnknownCmd(conn redcon.Conn, cmd redcon.Command) {
-	conn.WriteError("ERR unknown command '" + string(cmd.Args[0]) + "'")
+func (r *redisInMem) selectDbByNo(dbno string) *database {
+	db, ok := r.dbno2Database[dbno]
+	if !ok {
+		db := &database{items: map[string][]byte{}}
+		r.dbno2Database[dbno] = db
+	}
+	return db
+}
+
+func (r *redisInMem) Exec(conn redcon.Conn, cmd redcon.Command) {
+	db := r.getDbWithConn(conn.NetConn())
+
+	switch strings.ToLower(string(cmd.Args[0])) {
+	default:
+		r.UnknownCmd(conn, cmd)
+	case "set":
+		db.Set(conn, cmd)
+	case "get":
+		db.Get(conn, cmd)
+	case "del":
+		db.Del(conn, cmd)
+	}
 }
