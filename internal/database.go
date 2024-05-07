@@ -70,10 +70,10 @@ func (db *database) Expire(conn redcon.Conn, cmd redcon.Command) {
 	_, ok := db.items[key]
 	if !ok {
 		conn.WriteInt(0)
+		return
 	}
 
 	db.deadlines[key] = time.Now().Add(time.Second * time.Duration(sec))
-
 	conn.WriteInt(1)
 }
 
