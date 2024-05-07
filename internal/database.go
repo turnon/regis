@@ -17,10 +17,7 @@ func (db *database) Set(conn redcon.Conn, cmd redcon.Command) {
 		return
 	}
 
-	db.lock.Lock()
 	db.items[string(cmd.Args[1])] = cmd.Args[2]
-	db.lock.Unlock()
-
 	conn.WriteString("OK")
 }
 
@@ -30,10 +27,7 @@ func (db *database) Get(conn redcon.Conn, cmd redcon.Command) {
 		return
 	}
 
-	db.lock.Lock()
 	val, ok := db.items[string(cmd.Args[1])]
-	db.lock.Unlock()
-
 	if !ok {
 		conn.WriteNull()
 	} else {
@@ -47,11 +41,8 @@ func (db *database) Del(conn redcon.Conn, cmd redcon.Command) {
 		return
 	}
 
-	db.lock.Lock()
 	_, ok := db.items[string(cmd.Args[1])]
 	delete(db.items, string(cmd.Args[1]))
-	db.lock.Unlock()
-
 	if !ok {
 		conn.WriteInt(0)
 	} else {

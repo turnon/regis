@@ -8,14 +8,14 @@ import (
 	"github.com/tidwall/redcon"
 )
 
-type redisInMem struct {
+type server struct {
 	lock          sync.Mutex
 	conn2Dbno     map[net.Conn]string
 	dbno2Database map[string]*database
 }
 
 func ListenAndServe(addr string) error {
-	r := &redisInMem{
+	r := &server{
 		conn2Dbno:     map[net.Conn]string{},
 		dbno2Database: map[string]*database{},
 	}
@@ -45,26 +45,26 @@ func ListenAndServe(addr string) error {
 	})
 }
 
-func (r *redisInMem) UnknownCmd(conn redcon.Conn, cmd redcon.Command) {
+func (r *server) UnknownCmd(conn redcon.Conn, cmd redcon.Command) {
 	conn.WriteError("ERR unknown command '" + string(cmd.Args[0]) + "'")
 }
 
-func (r *redisInMem) Ping(conn redcon.Conn) {
+func (r *server) Ping(conn redcon.Conn) {
 	conn.WriteString("PONG")
 }
 
-func (r *redisInMem) Quit(conn redcon.Conn) {
+func (r *server) Quit(conn redcon.Conn) {
 	delete(r.conn2Dbno, conn.NetConn())
 	conn.WriteString("OK")
 	conn.Close()
 }
 
-func (r *redisInMem) Select(conn redcon.Conn, cmd redcon.Command) {
+func (r *server) Select(conn redcon.Conn, cmd redcon.Command) {
 	r.setDbWithConnAndDbno(conn.NetConn(), string(cmd.Args[1]))
 	conn.WriteString("OK")
 }
 
-func (r *redisInMem) setDbWithConnAndDbno(conn net.Conn, dbno string) *database {
+func (r *server) setDbWithConnAndDbno(conn net.Conn, dbno string) *database {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -74,7 +74,7 @@ func (r *redisInMem) setDbWithConnAndDbno(conn net.Conn, dbno string) *database 
 	return db
 }
 
-func (r *redisInMem) getDbWithConn(conn net.Conn) *database {
+func (r *server) getDbWithConn(conn net.Conn) *database {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -87,7 +87,7 @@ func (r *redisInMem) getDbWithConn(conn net.Conn) *database {
 	return db
 }
 
-func (r *redisInMem) selectDbByNo(dbno string) *database {
+func (r *server) selectDbByNo(dbno string) *database {
 	db, ok := r.dbno2Database[dbno]
 	if !ok {
 		db := &database{items: map[string][]byte{}}
@@ -96,8 +96,10 @@ func (r *redisInMem) selectDbByNo(dbno string) *database {
 	return db
 }
 
-func (r *redisInMem) Exec(conn redcon.Conn, cmd redcon.Command) {
+func (r *server) Exec(conn redcon.Conn, cmd redcon.Command) {
 	db := r.getDbWithConn(conn.NetConn())
+	db.lock.Lock()
+	defer db.lock.Unlock()
 
 	switch strings.ToLower(string(cmd.Args[0])) {
 	default:
